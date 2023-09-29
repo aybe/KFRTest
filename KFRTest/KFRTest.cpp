@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 #include <format>
 #include <iostream>
 #include <vector>
@@ -9,44 +10,68 @@ int main()
 {
 	using namespace kfr;
 
-	auto source_file = open_file_for_reading(KFR_FILEPATH("C:\\temp\\messij.wav"));
-	auto target_file = open_file_for_writing(KFR_FILEPATH("C:\\temp\\messij-reverb.wav"));
+	auto src_file = open_file_for_reading(KFR_FILEPATH("C:\\temp\\white-noise.wav"));
+	auto tgt_file = open_file_for_writing(KFR_FILEPATH("C:\\temp\\white-noise-filter.wav"));
 
-	auto source_reader = audio_reader_wav<double>(source_file);
+	auto wav_reader = audio_reader_wav<double>(src_file);
 
-	auto source_format = source_reader.format();
+	auto src_format = wav_reader.format();
 
-	auto source_rate = source_format.samplerate;
-	auto target_rate = source_rate; // TODO
+	auto src_rate = src_format.samplerate;
+	auto tgt_rate = static_cast<cometa::fmax>(22050);
 
-	auto target_format = source_format;
+	auto tgt_format = src_format;
 
-	target_format.samplerate = target_rate;
+	tgt_format.samplerate = tgt_rate;
 
-	auto target_writer = audio_writer_wav<double>(target_file, target_format);
+	auto wav_writer = audio_writer_wav<double>(tgt_file, tgt_format);
 
-	auto length = source_format.length;
+	auto buffer_length = static_cast<size_t>(1024);
 
-	auto block_size = static_cast<size_t>(1024);
-	auto blocks = static_cast<size_t>(std::ceil(static_cast<double>(length) / static_cast<double>(block_size)));
+	auto blocks = static_cast<size_t>(
+		std::ceil(static_cast<double>(src_format.length) / static_cast<double>(buffer_length)));
 
-	auto channels = source_format.channels;
+	auto channels = src_format.channels;
 
 	auto resamplers = std::vector(
 		channels,
-		resampler<double>(sample_rate_conversion_quality::high, static_cast<size_t>(target_rate), static_cast<size_t>(source_rate))
+		resampler<double>(
+			sample_rate_conversion_quality::high,
+			static_cast<size_t>(tgt_rate),
+			static_cast<size_t>(src_rate))
 	);
 
-	auto source_length = block_size * channels;
-	auto target_length = block_size * static_cast<size_t>(target_rate) / static_cast<size_t>(source_rate) * channels;
-	auto source_buffer = univector<double>(source_length);
-	auto target_buffer = univector<double>(target_length);
-	auto sample_buffer = univector2d<double, 2, 4>();
+	// TODO pre-buffer resamplers to avoid silence at beginning
 
-	for (auto block = 0u; block < blocks; ++block)
+	auto src_size = buffer_length;
+	auto src_data = univector2d<double>(channels, univector<double>(src_size));
+	auto src_temp = univector<double>(src_size * channels);
+
+	auto& resampler1 = resamplers[0];
+
+	auto tgt_size = resampler1.output_size_for_input(static_cast<itype>(src_size));
+	auto tgt_data = univector2d<double>(channels, univector<double>(tgt_size));
+	auto tgt_temp = univector<double>(tgt_size * channels);
+
+	for (size_t block = 0; block < blocks; ++block)
 	{
-		size_t r_size = source_reader.read(source_buffer);
-		size_t w_size = target_writer.write(source_buffer.data(), r_size);
-		std::cout << std::format("Block {} of {}\n", block + 1, blocks);
+		auto read = wav_reader.read(src_temp);
+
+		deinterleave(src_data, src_temp);
+
+		std::cout << std::format("block {} of {}, read: {}\n", block + 1, blocks, read);
+
+		for (size_t channel = 0; channel < channels; ++channel)
+		{
+			auto& resampler = resamplers[channel];
+
+			auto process = resampler.process(tgt_data[channel], src_data[channel]);
+
+			std::cout << std::format("channel: {}, process: {}\n", channel, process);
+		}
+
+		interleave(tgt_temp, tgt_data);
+
+		wav_writer.write(tgt_temp); // TODO last chunk may be smaller
 	}
 }
